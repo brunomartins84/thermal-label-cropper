@@ -113,13 +113,7 @@ def clean(folder: Path):
     folder = folder.resolve()
     all_pdfs = list(folder.glob("*.pdf"))
     generated = {p for p in all_pdfs if is_generated(p)}
-    originals_processed = {
-        p for p in all_pdfs
-        if p not in generated and any(
-            folder / f"{p.stem}{s}" in generated for s in CROP_SUFFIXES
-        )
-    }
-    to_delete = generated | originals_processed
+    to_delete = generated
     if not to_delete:
         print("Nada pra limpar.")
         return
