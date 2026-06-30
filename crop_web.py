@@ -39,7 +39,9 @@ def parse_args():
     p.add_argument("--sort-by-size", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--clean", action="store_true",
-                   help="Apaga recortes gerados e originais já processados")
+                   help="Apaga recortes gerados, mantém originais")
+    p.add_argument("--clean-all", action="store_true",
+                   help="Apaga todos os PDFs da pasta")
     p.add_argument("-h", "--help", action="help")
     return p.parse_args()
 
@@ -125,6 +127,15 @@ def clean(folder: Path):
 
 def main():
     args = parse_args()
+
+    if args.clean_all:
+        folder = Path("~/Downloads/pdf-label").expanduser()
+        pdfs = list(folder.glob("*.pdf"))
+        for p in sorted(pdfs):
+            p.unlink()
+            print(f"  🗑  {p.name}")
+        print(f"\n{len(pdfs)} arquivo(s) removido(s).")
+        return
 
     if args.clean:
         clean(Path("~/Downloads/pdf-label").expanduser())
