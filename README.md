@@ -24,6 +24,8 @@ pip install pymupdf numpy flask
 python crop_web.py label.pdf
 ```
 
+Or drop PDFs into `~/Downloads/pdf-label/` and use the `magic` helper (see below).
+
 ### Options
 
 | Flag | Default | Description |
@@ -35,21 +37,10 @@ python crop_web.py label.pdf
 | `--threshold N` | 245 | Pixel brightness below this counts as content |
 | `--sort-by-size` | off | Sort blocks largest-first instead of by position |
 | `--dry-run` | off | Show detected blocks without saving any files |
+| `--clean` | off | Delete generated crops, keep originals |
+| `--clean-all` | off | Delete all PDFs in the folder |
 
-### Examples
-
-```bash
-# Preview what would be detected without saving
-python crop_web.py label.pdf --dry-run
-
-# Only process page 1, with a bigger margin
-python crop_web.py label.pdf --pages 1 --margin 4
-
-# Sort crops largest-first
-python crop_web.py label.pdf --sort-by-size
-```
-
-## Helper script
+## magic helper
 
 Add this to `~/bin/magic` to run from anywhere:
 
@@ -57,19 +48,31 @@ Add this to `~/bin/magic` to run from anywhere:
 #!/bin/zsh
 cd ~/Downloads/pdf-label || exit 1
 source .venv/bin/activate
-python crop_web.py "$@"
+
+if [ "$1" = "--clean" ]; then
+    python crop_web.py --clean
+elif [ "$1" = "--clean-all" ]; then
+    python crop_web.py --clean-all
+elif [ $# -eq 0 ]; then
+    python crop_web.py *.pdf
+else
+    python crop_web.py "$@"
+fi
 ```
 
 Then:
 
-```bash
-magic label.pdf --dry-run
-```
+| Command | Action |
+|---|---|
+| `magic` | Process all PDFs in the folder |
+| `magic --dry-run` | Preview detected blocks without saving |
+| `magic --clean` | Delete generated crops, keep originals |
+| `magic --clean-all` | Delete everything |
 
 ## Project structure
 
 ```
-crop_web.py   # CLI entry point + page processing logic
-detector.py   # pixel-based block detection (pure logic, no Flask)
+crop_web.py   # CLI entry point and page processing logic
+detector.py   # pixel-based block detection (no Flask dependency)
 app.py        # browser fallback UI (Flask)
 ```
