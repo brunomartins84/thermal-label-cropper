@@ -30,7 +30,7 @@ def parse_args():
         description="Corta etiquetas de PDFs para impressora térmica.",
         add_help=False,
     )
-    p.add_argument("pdf", nargs="+", help="Arquivo(s) PDF de entrada")
+    p.add_argument("pdf", nargs="*", help="Arquivo(s) PDF de entrada")
     p.add_argument("--pages", help="Páginas a processar (ex: 1,3). Padrão: todas")
     p.add_argument("--margin", type=float, default=2, metavar="MM")
     p.add_argument("--gap", type=float, default=5, metavar="MM")
@@ -38,6 +38,8 @@ def parse_args():
     p.add_argument("--threshold", type=int, default=245, metavar="N")
     p.add_argument("--sort-by-size", action="store_true")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--clean", action="store_true",
+                   help="Apaga recortes gerados e originais já processados")
     p.add_argument("-h", "--help", action="help")
     return p.parse_args()
 
@@ -97,8 +99,43 @@ def process_page(pdf_path, doc, page_num, page, args):
     run_manual(pdf_path, doc, page, page_num, regions)
 
 
+CROP_SUFFIXES = ("-bloco1.pdf", "-bloco2.pdf", "-bloco3.pdf", "-bloco4.pdf", "-auto.pdf")
+
+
+def is_generated(path: Path) -> bool:
+    name = path.name
+    return any(name.endswith(s) for s in CROP_SUFFIXES) or (
+        "-" in path.stem and len(path.stem.split("-")[-1]) == 8
+    )
+
+
+def clean(folder: Path):
+    folder = folder.resolve()
+    all_pdfs = list(folder.glob("*.pdf"))
+    generated = {p for p in all_pdfs if is_generated(p)}
+    originals_processed = {
+        p for p in all_pdfs
+        if p not in generated and any(
+            folder / f"{p.stem}{s}" in generated for s in CROP_SUFFIXES
+        )
+    }
+    to_delete = generated | originals_processed
+    if not to_delete:
+        print("Nada pra limpar.")
+        return
+    for p in sorted(to_delete):
+        p.unlink()
+        print(f"  🗑  {p.name}")
+    print(f"\n{len(to_delete)} arquivo(s) removido(s).")
+
+
 def main():
     args = parse_args()
+
+    if args.clean:
+        clean(Path("~/Downloads/pdf-label").expanduser())
+        return
+
     for pdf_arg in args.pdf:
         pdf_path = Path(pdf_arg).expanduser()
         if not pdf_path.exists():
