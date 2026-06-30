@@ -30,7 +30,7 @@ def parse_args():
         description="Corta etiquetas de PDFs para impressora térmica.",
         add_help=False,
     )
-    p.add_argument("pdf", help="Arquivo PDF de entrada")
+    p.add_argument("pdf", nargs="+", help="Arquivo(s) PDF de entrada")
     p.add_argument("--pages", help="Páginas a processar (ex: 1,3). Padrão: todas")
     p.add_argument("--margin", type=float, default=2, metavar="MM")
     p.add_argument("--gap", type=float, default=5, metavar="MM")
@@ -99,26 +99,26 @@ def process_page(pdf_path, doc, page_num, page, args):
 
 def main():
     args = parse_args()
-    pdf_path = Path(args.pdf).expanduser()
+    for pdf_arg in args.pdf:
+        pdf_path = Path(pdf_arg).expanduser()
+        if not pdf_path.exists():
+            print(f"Erro: arquivo não encontrado: {pdf_path}")
+            continue
 
-    if not pdf_path.exists():
-        print(f"Erro: arquivo não encontrado: {pdf_path}")
-        sys.exit(1)
+        doc = fitz.open(pdf_path)
+        total = len(doc)
 
-    doc = fitz.open(pdf_path)
-    total = len(doc)
+        if args.pages:
+            page_nums = [int(p) - 1 for p in args.pages.split(",")]
+            invalid = [n + 1 for n in page_nums if not (0 <= n < total)]
+            if invalid:
+                print(f"Erro: páginas inválidas: {invalid} (total: {total})")
+                continue
+        else:
+            page_nums = list(range(total))
 
-    if args.pages:
-        page_nums = [int(p) - 1 for p in args.pages.split(",")]
-        invalid = [n + 1 for n in page_nums if not (0 <= n < total)]
-        if invalid:
-            print(f"Erro: páginas inválidas: {invalid} (total: {total})")
-            sys.exit(1)
-    else:
-        page_nums = list(range(total))
-
-    for page_num in page_nums:
-        process_page(pdf_path, doc, page_num, doc[page_num], args)
+        for page_num in page_nums:
+            process_page(pdf_path, doc, page_num, doc[page_num], args)
 
 
 if __name__ == "__main__":
