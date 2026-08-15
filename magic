@@ -77,6 +77,12 @@ wait_job() {
     [ "$(queue_len $q)" = "0" ]
 }
 
+# Se o usuario abortar no meio (ex: no prompt do sudo), a fila nao pode ficar
+# segurando job. Libera antes de sair.
+release_on_abort() {
+    trap 'echo; echo "Interrompido. Liberando a fila."; cupsenable --release "$1" 2>/dev/null; exit 130' INT TERM
+}
+
 # Realinha o URI e destrava. Preserva os jobs, a menos que purge=1.
 fix_printer() {
     local queue=$1 purge=${2:-0} hard=${3:-0}
@@ -203,6 +209,7 @@ if [ "$1" = "--print" ] || [ "$1" = "--print-preview" ]; then
 
     echo "Imprimindo ${#files[@]} arquivo(s) em $queue:"
     echo
+    release_on_abort "$queue"
 
     done_count=0
     for f in "${files[@]}"; do
@@ -212,7 +219,10 @@ if [ "$1" = "--print" ] || [ "$1" = "--print-preview" ]; then
         fi
 
         echo "-> ${f:t}"
-        lp -d "$queue" -- "$f" >/dev/null || { echo "   falha ao enviar"; exit 1 }
+        # Sem isto o lp usa o PageSize do PPD sem escala, e um recorte maior que
+        # a etiqueta sai cortado. O Cmd+P do Finder passa pelo Preview, que
+        # escala pra caber; fit-to-page e' o equivalente.
+        lp -d "$queue" -o fit-to-page -- "$f" >/dev/null || { echo "   falha ao enviar"; exit 1 }
 
         if wait_job "$queue"; then
             done_count=$((done_count + 1))
@@ -285,6 +295,7 @@ if [ "$1" = "--fix" ]; then
         fi
     fi
 
+    release_on_abort "$queue"
     fix_printer "$queue" "$purge" "$hard" || exit 1
 
     echo
