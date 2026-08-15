@@ -1,0 +1,267 @@
+#!/bin/zsh
+
+LABEL_DIR=~/Downloads/pdf-label
+
+find_queue() {
+    local q
+    q=$(lpstat -d 2>/dev/null | awk -F': +' '{print $2}')
+    [ -z "$q" ] && q=$(lpstat -a 2>/dev/null | awk 'NR==1 {print $1}')
+    echo "$q"
+}
+
+queue_uri() {
+    lpstat -v "$1" 2>/dev/null | awk -F': +' '{print $2}'
+}
+
+real_uri() {
+    local serial found
+    serial=$(echo "$1" | sed -n 's/.*serial=\([^&]*\).*/\1/p')
+    if [ -n "$serial" ]; then
+        found=$(lpinfo -v 2>/dev/null | awk -v s="serial=$serial" '$1 == "direct" && index($2, s) {print $2; exit}')
+    fi
+    [ -z "$found" ] && found=$(lpinfo -v 2>/dev/null | awk '$1 == "direct" && $2 ~ /^usb:/ {print $2; exit}')
+    echo "$found"
+}
+
+queue_len() {
+    lpstat -o "$1" 2>/dev/null | grep -c .
+}
+
+# Espelha is_generated() do crop_web.py: recortes gerados, nunca o PDF original.
+list_crops() {
+    local f name stem tail
+    for f in $LABEL_DIR/*.pdf(N); do
+        name=${f:t}
+        stem=${name%.pdf}
+        tail=${stem##*-}
+        case "$name" in
+            *-bloco*.pdf|*-auto.pdf|*-manual.pdf)
+                print -r -- "$f"
+                ;;
+            *)
+                # sufixo uuid do modo manual: 8 chars hex
+                if [[ "$stem" == *-* && "$tail" == [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f] ]]; then
+                    print -r -- "$f"
+                fi
+                ;;
+        esac
+    done
+}
+
+list_originals() {
+    local f crops
+    crops=$(list_crops)
+    for f in $LABEL_DIR/*.pdf(N); do
+        print -r -- "$crops" | grep -qxF -- "$f" || print -r -- "$f"
+    done
+}
+
+if [ "$1" = "--print" ] || [ "$1" = "--print-preview" ]; then
+    preview=0
+    [ "$1" = "--print-preview" ] && preview=1
+    shift
+    files=()
+    for arg in "$@"; do
+        case "$arg" in
+            -*) echo "Opcao desconhecida: $arg"; exit 1 ;;
+            *) files+=("$arg") ;;
+        esac
+    done
+
+    if [ ${#files[@]} -eq 0 ]; then
+        files=(${(f)"$(list_crops)"})
+    fi
+
+    if [ ${#files[@]} -eq 0 ]; then
+        echo "Nenhum recorte encontrado em $LABEL_DIR"
+        echo "Rode 'magic' primeiro pra gerar os cortes."
+        exit 1
+    fi
+
+    queue=$(find_queue)
+    if [ -z "$queue" ]; then
+        echo "Nenhuma fila de impressao encontrada."
+        exit 1
+    fi
+
+    if [ "$preview" = "1" ]; then
+        state=$(lpoptions -p "$queue" 2>/dev/null | tr ' ' '\n' | sed -n 's/^printer-state=//p')
+        case "$state" in
+            3) state_txt="idle" ;;
+            4) state_txt="imprimindo" ;;
+            5) state_txt="parada" ;;
+            *) state_txt="estado $state" ;;
+        esac
+        current=$(queue_uri "$queue")
+        actual=$(real_uri "$current")
+        if [ -z "$actual" ]; then
+            uri_txt="impressora nao aparece no USB"
+        elif [ "$current" = "$actual" ]; then
+            uri_txt="ok"
+        else
+            uri_txt="divergente, --print realinha antes de imprimir"
+        fi
+
+        echo "Fila: $queue ($state_txt)"
+        echo "URI:  $uri_txt"
+        echo
+        echo "${#files[@]} arquivo(s) seriam impressos:"
+        for f in "${files[@]}"; do
+            printf "  - %-52s %6s KB  %s\n" "${f:t}" \
+                "$(( $(stat -f %z "$f") / 1024 ))" \
+                "$(stat -f "%Sm" -t "%d/%m %H:%M" "$f")"
+        done
+
+        originals=(${(f)"$(list_originals)"})
+        if [ ${#originals[@]} -gt 0 ]; then
+            echo
+            echo "Ignorados (originais):"
+            for f in "${originals[@]}"; do
+                echo "  - ${f:t}"
+            done
+        fi
+
+        echo
+        echo "Nada foi impresso. Use 'magic --print' pra imprimir."
+        exit 0
+    fi
+
+    echo "Imprimindo ${#files[@]} arquivo(s) em $queue:"
+    echo
+
+    current=$(queue_uri "$queue")
+    actual=$(real_uri "$current")
+    if [ -z "$actual" ]; then
+        echo "A impressora nao aparece no USB. Confira cabo e energia."
+        exit 1
+    fi
+    if [ "$current" != "$actual" ]; then
+        echo "URI divergente, realinhando antes de imprimir."
+        lpadmin -p "$queue" -v "$actual" || exit 1
+    fi
+
+    for f in "${files[@]}"; do
+        if [ ! -f "$f" ]; then
+            echo "Arquivo nao encontrado: $f"
+            exit 1
+        fi
+        echo "-> ${f:t}"
+        lp -d "$queue" -- "$f" >/dev/null || { echo "Falha ao enviar ${f:t}"; exit 1 }
+
+        waited=0
+        while [ "$(queue_len $queue)" != "0" ] && [ $waited -lt 90 ]; do
+            sleep 1
+            waited=$((waited + 1))
+        done
+
+        if [ "$(queue_len $queue)" != "0" ]; then
+            echo
+            echo "A fila nao esvaziou em ${waited}s. Provavel travamento."
+            echo "Rode 'magic --fix' e depois 'magic --print' de novo."
+            exit 1
+        fi
+        sleep 1
+    done
+
+    echo
+    echo "Pronto. ${#files[@]} etiqueta(s) enviada(s)."
+    exit 0
+fi
+
+if [ "$1" = "--fix" ]; then
+    shift
+    purge=0
+    hard=0
+    for arg in "$@"; do
+        case "$arg" in
+            --purge) purge=1 ;;
+            --hard)  hard=1 ;;
+            *) echo "Opcao desconhecida: $arg"; exit 1 ;;
+        esac
+    done
+
+    queue=$(find_queue)
+    if [ -z "$queue" ]; then
+        echo "Nenhuma fila de impressao encontrada."
+        exit 1
+    fi
+
+    current=$(queue_uri "$queue")
+    actual=$(real_uri "$current")
+
+    if [ -z "$actual" ]; then
+        echo "$queue: a impressora nao aparece no USB. Confira cabo e energia."
+        exit 1
+    fi
+
+    state=$(lpoptions -p "$queue" 2>/dev/null | tr ' ' '\n' | sed -n 's/^printer-state=//p')
+    pending=$(queue_len "$queue")
+
+    if [ "$current" = "$actual" ] && [ "$state" = "3" ] && [ "$pending" = "0" ] && [ "$hard" = "0" ]; then
+        echo "$queue: idle, URI correto, fila vazia. Nada a corrigir."
+        exit 0
+    fi
+
+    echo "Fila:  $queue"
+    echo "URI configurado: $current"
+    echo "URI real:        $actual"
+    if [ "$pending" != "0" ]; then
+        if [ "$purge" = "1" ]; then
+            echo "Jobs na fila: $pending (serao cancelados)"
+        else
+            echo "Jobs na fila: $pending (serao preservados)"
+        fi
+    fi
+    echo
+
+    if [ "$purge" = "1" ]; then
+        cupsdisable -c "$queue"
+    else
+        cupsdisable --hold "$queue"
+    fi
+
+    [ "$current" != "$actual" ] && { lpadmin -p "$queue" -v "$actual" || exit 1 }
+
+    if [ "$hard" = "0" ]; then
+        cupsenable --release "$queue"
+        sleep 4
+        reasons=$(lpoptions -p "$queue" 2>/dev/null | tr ' ' '\n' | sed -n 's/^printer-state-reasons=//p')
+        case "$reasons" in
+            *connecting-to-device*)
+                hard=1
+                echo "Ainda travado. Indo pro caminho pesado, vai pedir a senha."
+                echo
+                ;;
+            *)
+                echo "Resolvido sem senha."
+                ;;
+        esac
+    fi
+
+    if [ "$hard" = "1" ]; then
+        cupsdisable --hold "$queue"
+        sudo pkill -f /usr/libexec/cups/backend/usb 2>/dev/null
+        sudo launchctl kickstart -k system/org.cups.cupsd
+        sleep 2
+        cupsenable --release "$queue"
+        sleep 1
+    fi
+
+    echo
+    lpstat -p "$queue"
+    lpstat -o "$queue"
+    exit 0
+fi
+
+cd $LABEL_DIR || exit 1
+source .venv/bin/activate
+
+if [ "$1" = "--clean" ]; then
+    python crop_web.py --clean
+elif [ "$1" = "--clean-all" ]; then
+    python crop_web.py --clean-all
+elif [ $# -eq 0 ]; then
+    python crop_web.py *.pdf
+else
+    python crop_web.py "$@"
+fi

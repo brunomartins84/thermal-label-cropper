@@ -40,34 +40,66 @@ Or drop PDFs into `~/Downloads/pdf-label/` and use the `magic` helper (see below
 | `--clean` | off | Delete generated crops, keep originals |
 | `--clean-all` | off | Delete all PDFs in the folder |
 
+A file counts as a generated crop when it ends in `-bloco<N>.pdf`, `-auto.pdf`,
+`-manual.pdf`, or an 8-character hex suffix from the manual UI. Everything else is
+treated as an original and left alone by `--clean`.
+
 ## magic helper
 
-Add this to `~/bin/magic` to run from anywhere:
+`magic` wraps the whole workflow — cropping, printing and printer recovery — so it
+runs from any directory. Install it by symlinking the version tracked here:
 
-```zsh
-#!/bin/zsh
-cd ~/Downloads/pdf-label || exit 1
-source .venv/bin/activate
-
-if [ "$1" = "--clean" ]; then
-    python crop_web.py --clean
-elif [ "$1" = "--clean-all" ]; then
-    python crop_web.py --clean-all
-elif [ $# -eq 0 ]; then
-    python crop_web.py *.pdf
-else
-    python crop_web.py "$@"
-fi
+```bash
+ln -sf ~/Downloads/pdf-label/magic ~/bin/magic
 ```
-
-Then:
 
 | Command | Action |
 |---|---|
 | `magic` | Process all PDFs in the folder |
 | `magic --dry-run` | Preview detected blocks without saving |
+| `magic --print-preview` | List which crops would be printed — touches nothing |
+| `magic --print` | Print the crops, one job at a time |
+| `magic --fix` | Recover the printer when it goes offline |
 | `magic --clean` | Delete generated crops, keep originals |
 | `magic --clean-all` | Delete everything |
+
+`--print` and `--print-preview` only ever pick up generated crops (`-bloco*`,
+`-auto`, `-manual`, uuid suffix) — the original PDF you saved from the website is
+never sent to the printer.
+
+`--print` sends one job at a time, waiting for the queue to drain in between.
+Back-to-back jobs are what wedges the printer, so this is deliberate.
+
+## Printer troubleshooting
+
+The thermal printer occasionally re-enumerates on USB under a different descriptor —
+alternating between `usb:///LABEL-9X20?serial=…` and
+`usb://Printer/POS%20Label%20Printer?serial=…`. When that happens the queue's device
+URI no longer matches the device, CUPS gets stuck on `connecting-to-device`, and the
+printer shows as offline. Power-cycling the printer does not help; the URI is what
+is wrong.
+
+```bash
+magic --fix
+```
+
+It detects the real URI via `lpinfo -v`, repoints the queue with `lpadmin`, and
+preserves queued jobs using `cupsdisable --hold` / `cupsenable --release` — the held
+job prints once the queue is corrected, so nothing needs to be re-sent.
+
+| Flag | Effect |
+|---|---|
+| `--hard` | Also kill the wedged USB backend and restart cupsd (asks for sudo) |
+| `--purge` | Discard the queue instead of preserving it |
+
+Plain `--fix` runs without sudo (`lpadmin`, `cupsdisable` and `cupsenable`
+authenticate locally for members of `_lpadmin`) and only escalates to `--hard` on its
+own if the printer is still stuck afterwards.
+
+The underlying cause is likely electrical: the printer sits behind a USB hub chain,
+and the current spike when the thermal head fires resets the device mid-job.
+Plugging it straight into the Mac, or into a powered hub, reduces how often it
+happens.
 
 ## Project structure
 
@@ -75,4 +107,5 @@ Then:
 crop_web.py   # CLI entry point and page processing logic
 detector.py   # pixel-based block detection (no Flask dependency)
 app.py        # browser fallback UI (Flask)
+magic         # zsh wrapper: crop, print, printer recovery
 ```
