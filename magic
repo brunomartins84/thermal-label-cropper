@@ -67,7 +67,7 @@ wait_job() {
     local waited=0 stuck=0
     while [ "$(queue_len $q)" != "0" ] && [ $waited -lt $max ]; do
         case "$(printer_reasons $q)" in
-            *connecting-to-device*) stuck=$((stuck + 1)) ;;
+            *connecting-to-device*|*hold-new-jobs*) stuck=$((stuck + 1)) ;;
             *) stuck=0 ;;
         esac
         [ $stuck -ge $stuck_limit ] && return 1
@@ -211,6 +211,15 @@ if [ "$1" = "--print" ] || [ "$1" = "--print-preview" ]; then
     echo
     release_on_abort "$queue"
 
+    # Fila segurando job engole tudo em silencio; solta antes de mandar.
+    case "$reasons" in
+        *hold-new-jobs*)
+            echo "Fila estava segurando jobs, liberando."
+            cupsenable --release "$queue"
+            echo
+            ;;
+    esac
+
     done_count=0
     for f in "${files[@]}"; do
         if [ ! -f "$f" ]; then
@@ -277,7 +286,12 @@ if [ "$1" = "--fix" ]; then
     state=$(printer_state "$queue")
     pending=$(queue_len "$queue")
 
-    if [ "$state" = "3" ] && [ "$pending" = "0" ] && [ "$hard" = "0" ]; then
+    held=0
+    case "$(printer_reasons "$queue")" in
+        *hold-new-jobs*) held=1 ;;
+    esac
+
+    if [ "$state" = "3" ] && [ "$pending" = "0" ] && [ "$held" = "0" ] && [ "$hard" = "0" ]; then
         current=$(queue_uri "$queue")
         actual=$(real_uri "$current")
         if [ "$current" = "$actual" ]; then
@@ -285,6 +299,8 @@ if [ "$1" = "--fix" ]; then
             exit 0
         fi
     fi
+
+    [ "$held" = "1" ] && echo "Fila estava segurando jobs."
 
     echo "Fila: $queue"
     if [ "$pending" != "0" ]; then
