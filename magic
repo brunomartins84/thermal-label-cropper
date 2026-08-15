@@ -160,21 +160,22 @@ if [ "$1" = "--print" ] || [ "$1" = "--print-preview" ]; then
     reasons=$(printer_reasons "$queue")
 
     if [ "$preview" = "1" ]; then
-        case "$state" in
-            3) state_txt="idle" ;;
-            4) state_txt="imprimindo" ;;
-            5) state_txt="parada" ;;
-            *) state_txt="estado $state" ;;
-        esac
-        echo "Fila: $queue ($state_txt)"
-
-        # Verificar o URI custa ~5s de lpinfo, entao so' quando ha' motivo.
+        # Estado da impressora so' interessa quando ha' algo errado; no caso
+        # normal o preview e' so' a lista de arquivos.
         suspect=0
         [ "$state" != "3" ] && suspect=1
         case "$reasons" in
-            *connecting-to-device*) suspect=1 ;;
+            *connecting-to-device*|*hold-new-jobs*) suspect=1 ;;
         esac
+
         if [ "$suspect" = "1" ]; then
+            case "$state" in
+                3) state_txt="idle" ;;
+                4) state_txt="imprimindo" ;;
+                5) state_txt="parada" ;;
+                *) state_txt="estado $state" ;;
+            esac
+            echo "Fila: $queue ($state_txt)"
             current=$(queue_uri "$queue")
             actual=$(real_uri "$current")
             if [ -z "$actual" ]; then
@@ -184,9 +185,9 @@ if [ "$1" = "--print" ] || [ "$1" = "--print-preview" ]; then
             else
                 echo "URI:  ok"
             fi
+            echo
         fi
 
-        echo
         echo "${#files[@]} arquivo(s) seriam impressos:"
         for f in "${files[@]}"; do
             printf "  - %-52s %6s KB  %s\n" "${f:t}" \
