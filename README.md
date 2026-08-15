@@ -46,8 +46,8 @@ treated as an original and left alone by `--clean`.
 
 ## magic helper
 
-`magic` wraps the whole workflow — cropping, printing and printer recovery — so it
-runs from any directory. Install it by symlinking the version tracked here:
+`magic` wraps cropping and printer recovery so both run from any directory.
+Install it by symlinking the version tracked here:
 
 ```bash
 ln -sf ~/Downloads/pdf-label/magic ~/bin/magic
@@ -57,27 +57,15 @@ ln -sf ~/Downloads/pdf-label/magic ~/bin/magic
 |---|---|
 | `magic` | Process all PDFs in the folder |
 | `magic --dry-run` | Preview detected blocks without saving |
-| `magic --print-preview` | List which crops would be printed — touches nothing |
-| `magic --print` | Print the crops, one job at a time |
 | `magic --fix` | Recover the printer when it goes offline |
 | `magic --clean` | Delete generated crops, keep originals |
 | `magic --clean-all` | Delete everything |
 
-`--print` and `--print-preview` only ever pick up generated crops (`-bloco*`,
-`-auto`, `-manual`, uuid suffix) — the original PDF you saved from the website is
-never sent to the printer.
-
-`--print` queues every crop at once and then watches the queue until it drains.
-The printer re-enumerates on USB after each job, alternating between two
-descriptors, so the queue's device URI goes stale between jobs; the watcher
-repoints it as soon as that happens, which keeps the jobs flowing without
-having to serialise them.
-
-Crops are scaled and rotated to the label before being sent, by `fit_label.py`.
-CUPS' own `-o fit-to-page` has no effect here — the chain ends at the vendor's
-`rastertodlabel` filter and the fitting is lost — so a 202x118mm crop would
-otherwise be printed clipped. The result matches what Preview does on Cmd+P:
-auto-rotate, then scale to fit (74% for that crop, in both).
+Printing itself is done by hand: select the crops in Finder and hit Cmd+P. The
+print dialog's "Etiqueta" preset (Auto Rotate + Scale to Fit) is what gets the
+geometry right, and reproducing it from `lp` turned out not to be worth it —
+`-o fit-to-page` is ignored by this driver, and pre-fitting the page to the
+label clipped the output.
 
 ## Printer troubleshooting
 
@@ -116,6 +104,5 @@ happens.
 crop_web.py   # CLI entry point and page processing logic
 detector.py   # pixel-based block detection (no Flask dependency)
 app.py        # browser fallback UI (Flask)
-fit_label.py  # scales/rotates a crop onto the label before printing
-magic         # zsh wrapper: crop, print, printer recovery
+magic         # zsh wrapper: cropping plus printer recovery
 ```
