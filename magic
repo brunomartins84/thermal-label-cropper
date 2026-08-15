@@ -131,7 +131,9 @@ wait_job() {
 # Se o usuario abortar no meio (ex: no prompt do sudo), a fila nao pode ficar
 # segurando job. Libera antes de sair.
 release_on_abort() {
-    trap 'echo; echo "Interrompido. Liberando a fila."; cupsenable --release "$1" 2>/dev/null; exit 130' INT TERM
+    # Aspas duplas de proposito: a fila precisa ser fixada agora, nao na hora
+    # em que o trap disparar, quando $1 ja' e' outra coisa.
+    trap "echo; echo 'Interrompido. Liberando a fila.'; cupsenable --release '$1' 2>/dev/null; exit 130" INT TERM
 }
 
 # Realinha o URI e destrava. Preserva os jobs, a menos que purge=1.
@@ -269,59 +271,77 @@ if [ "$1" = "--print" ] || [ "$1" = "--print-preview" ]; then
             ;;
     esac
 
-    done_count=0
+    # O -o fit-to-page do CUPS nao tem efeito nesta impressora (a cadeia vai pro
+    # rastertodlabel e o encaixe se perde), entao o ajuste e' feito aqui.
+    tmp=$(mktemp -d)
+    trap "rm -rf $tmp" EXIT
+    fitted=()
     for f in "${files[@]}"; do
         if [ ! -f "$f" ]; then
             echo "Arquivo nao encontrado: $f"
             exit 1
         fi
+        out=$tmp/${f:t}
+        if ! $LABEL_DIR/.venv/bin/python $LABEL_DIR/fit_label.py "$f" "$out" --quiet; then
+            echo "Falha ao ajustar ${f:t}"
+            exit 1
+        fi
+        fitted+=("$out")
+    done
 
-        echo "-> ${f:t}"
+    current=$(queue_uri "$queue")
+    actual=$(usb_uri_fast "$current")
+    if [ -n "$actual" ] && [ "$current" != "$actual" ]; then
+        lpadmin -p "$queue" -v "$actual" || exit 1
+    fi
 
-        # Prevenir sai muito mais barato que destravar: o descritor troca a cada
-        # job, entao realinha antes de mandar em vez de esperar o job encalhar.
+    for i in {1..${#fitted[@]}}; do
+        echo "-> ${files[$i]:t}"
+        lp -d "$queue" -t "${files[$i]:t}" -- "${fitted[$i]}" >/dev/null \
+            || { echo "   falha ao enviar"; exit 1 }
+    done
+    echo
+
+    # Tudo ja' esta' na fila; daqui pra frente e' so' vigiar. O descritor troca
+    # entre um job e outro, entao reapontar na hora evita o encalhe sem precisar
+    # serializar o envio.
+    limit=$((120 + 60 * ${#fitted[@]}))
+    waited=0
+    stuck=0
+    while [ "$(queue_len $queue)" != "0" ] && [ $waited -lt $limit ]; do
         current=$(queue_uri "$queue")
         actual=$(usb_uri_fast "$current")
         if [ -n "$actual" ] && [ "$current" != "$actual" ]; then
             echo "   descritor mudou, reapontando"
-            lpadmin -p "$queue" -v "$actual" || exit 1
+            cupsdisable --hold "$queue"
+            lpadmin -p "$queue" -v "$actual"
+            cupsenable --release "$queue"
+            stuck=0
+        else
+            case "$(printer_reasons $queue)" in
+                *connecting-to-device*|*hold-new-jobs*) stuck=$((stuck + 1)) ;;
+                *) stuck=0 ;;
+            esac
+            if [ $stuck -ge 20 ]; then
+                echo "   encalhou. Rodando o fix, os jobs ficam preservados."
+                fix_printer "$queue" || break
+                stuck=0
+            fi
         fi
-
-        # Sem isto o lp usa o PageSize do PPD sem escala, e um recorte maior que
-        # a etiqueta sai cortado. O Cmd+P do Finder passa pelo Preview, que
-        # escala pra caber; fit-to-page e' o equivalente.
-        lp -d "$queue" -o fit-to-page -- "$f" >/dev/null || { echo "   falha ao enviar"; exit 1 }
-
-        if wait_job "$queue"; then
-            done_count=$((done_count + 1))
-            sleep 1
-            continue
-        fi
-
-        echo "   travou. Rodando o fix, o job fica preservado."
-        if fix_printer "$queue" && wait_job "$queue" 30 120; then
-            echo "   destravou, etiqueta saiu."
-            done_count=$((done_count + 1))
-            sleep 1
-            continue
-        fi
-
-        echo
-        echo "Nao consegui destravar. ${done_count} de ${#files[@]} impressa(s)."
-        restantes=("${(@)files[$((done_count + 1)),-1]}")
-        echo "Faltou:"
-        for r in "${restantes[@]}"; do
-            echo "  - ${r:t}"
-        done
-        echo
-        echo "Depois de resolver, imprima so' o que falta:"
-        echo "  magic --print ${(j: :)${(@q)restantes}}"
-        exit 1
+        sleep 1
+        waited=$((waited + 1))
     done
 
+    faltam=$(queue_len "$queue")
     echo
-    echo "Pronto. ${done_count} etiqueta(s) impressa(s)."
-    exit 0
+    if [ "$faltam" = "0" ]; then
+        echo "Pronto. ${#files[@]} etiqueta(s) impressa(s)."
+        exit 0
+    fi
+
+    echo "$((${#files[@]} - faltam)) de ${#files[@]} impressa(s), $faltam ainda na fila."
+    echo "Rode 'magic --fix' pra destravar; os jobs continuam la'."
+    exit 1
 fi
 
 if [ "$1" = "--fix" ]; then
