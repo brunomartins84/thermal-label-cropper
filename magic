@@ -28,6 +28,57 @@ queue_len() {
     lpstat -o "$1" 2>/dev/null | grep -c .
 }
 
+urlenc() {
+    local s=$1 out="" i c
+    for (( i = 1; i <= ${#s}; i++ )); do
+        c=${s[i]}
+        case "$c" in
+            [A-Za-z0-9._~-]) out+="$c" ;;
+            *) out+=$(printf '%%%02X' "'$c") ;;
+        esac
+    done
+    print -r -- "$out"
+}
+
+# Esta impressora re-enumera a cada job, alternando o descritor USB, e o URI da
+# fila fica velho. O CUPS monta usb://<vendor>/<product>?serial=<sn>; derivar do
+# ioreg custa 0.03s contra ~15s do lpinfo -v, que sonda todos os backends.
+usb_uri_fast() {
+    local serial found v p
+    serial=$(echo "$1" | sed -n 's/.*serial=\([^&]*\).*/\1/p')
+    [ -z "$serial" ] && return 1
+
+    found=$(ioreg -p IOUSB -l -w 0 2>/dev/null | awk -F'"' -v want="$serial" '
+        /"USB Vendor Name"/  { v = $4 }
+        /"USB Product Name"/ { p = $4 }
+        /"USB Serial Number"/ {
+            if ($4 == want && p != "") { print v "\t" p; exit }
+            v = ""; p = ""
+        }
+    ')
+    [ -z "$found" ] && return 1
+
+    v=${found%%$'\t'*}
+    p=${found#*$'\t'}
+    print -r -- "usb://$(urlenc $v)/$(urlenc $p)?serial=$serial"
+}
+
+# Travamento real e' connecting-to-device persistente com job na fila. O estado
+# aparece por alguns segundos no inicio de qualquer job, entao um retrato unico
+# da falso positivo.
+still_stuck() {
+    local q=$1 secs=${2:-15} i
+    for (( i = 1; i <= secs; i++ )); do
+        [ "$(queue_len $q)" = "0" ] && return 1
+        case "$(printer_reasons $q)" in
+            *connecting-to-device*) ;;
+            *) return 1 ;;
+        esac
+        sleep 1
+    done
+    return 0
+}
+
 printer_state() {
     lpoptions -p "$1" 2>/dev/null | tr ' ' '\n' | sed -n 's/^printer-state=//p'
 }
@@ -108,13 +159,10 @@ fix_printer() {
 
     if [ "$hard" = "0" ]; then
         cupsenable --release "$queue"
-        sleep 4
-        case "$(printer_reasons $queue)" in
-            *connecting-to-device*)
-                hard=1
-                echo "   ainda travado, indo pro caminho pesado (vai pedir a senha)"
-                ;;
-        esac
+        if still_stuck "$queue" 15; then
+            hard=1
+            echo "   ainda travado, indo pro caminho pesado (vai pedir a senha)"
+        fi
     fi
 
     if [ "$hard" = "1" ]; then
@@ -229,6 +277,16 @@ if [ "$1" = "--print" ] || [ "$1" = "--print-preview" ]; then
         fi
 
         echo "-> ${f:t}"
+
+        # Prevenir sai muito mais barato que destravar: o descritor troca a cada
+        # job, entao realinha antes de mandar em vez de esperar o job encalhar.
+        current=$(queue_uri "$queue")
+        actual=$(usb_uri_fast "$current")
+        if [ -n "$actual" ] && [ "$current" != "$actual" ]; then
+            echo "   descritor mudou, reapontando"
+            lpadmin -p "$queue" -v "$actual" || exit 1
+        fi
+
         # Sem isto o lp usa o PageSize do PPD sem escala, e um recorte maior que
         # a etiqueta sai cortado. O Cmd+P do Finder passa pelo Preview, que
         # escala pra caber; fit-to-page e' o equivalente.
