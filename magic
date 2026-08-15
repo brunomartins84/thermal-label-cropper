@@ -28,17 +28,44 @@ queue_len() {
     lpstat -o "$1" 2>/dev/null | grep -c .
 }
 
-printer_state() {
-    lpoptions -p "$1" 2>/dev/null | tr ' ' '\n' | sed -n 's/^printer-state=//p'
+urlenc() {
+    local s=$1 out="" i c
+    for (( i = 1; i <= ${#s}; i++ )); do
+        c=${s[i]}
+        case "$c" in
+            [A-Za-z0-9._~-]) out+="$c" ;;
+            *) out+=$(printf '%%%02X' "'$c") ;;
+        esac
+    done
+    print -r -- "$out"
 }
 
-printer_reasons() {
-    lpoptions -p "$1" 2>/dev/null | tr ' ' '\n' | sed -n 's/^printer-state-reasons=//p'
+# Esta impressora re-enumera a cada job, alternando o descritor USB, e o URI da
+# fila fica velho. O CUPS monta usb://<vendor>/<product>?serial=<sn>; derivar do
+# ioreg custa 0.03s contra ~15s do lpinfo -v, que sonda todos os backends.
+usb_uri_fast() {
+    local serial found v p
+    serial=$(echo "$1" | sed -n 's/.*serial=\([^&]*\).*/\1/p')
+    [ -z "$serial" ] && return 1
+
+    found=$(ioreg -p IOUSB -l -w 0 2>/dev/null | awk -F'"' -v want="$serial" '
+        /"USB Vendor Name"/  { v = $4 }
+        /"USB Product Name"/ { p = $4 }
+        /"USB Serial Number"/ {
+            if ($4 == want && p != "") { print v "\t" p; exit }
+            v = ""; p = ""
+        }
+    ')
+    [ -z "$found" ] && return 1
+
+    v=${found%%$'\t'*}
+    p=${found#*$'\t'}
+    print -r -- "usb://$(urlenc $v)/$(urlenc $p)?serial=$serial"
 }
 
 # Travamento real e' connecting-to-device persistente com job na fila. O estado
 # aparece por alguns segundos no inicio de qualquer job, entao um retrato unico
-# da falso positivo e manda pro sudo sem necessidade.
+# da falso positivo.
 still_stuck() {
     local q=$1 secs=${2:-15} i
     for (( i = 1; i <= secs; i++ )); do
@@ -50,6 +77,55 @@ still_stuck() {
         sleep 1
     done
     return 0
+}
+
+printer_state() {
+    lpoptions -p "$1" 2>/dev/null | tr ' ' '\n' | sed -n 's/^printer-state=//p'
+}
+
+printer_reasons() {
+    lpoptions -p "$1" 2>/dev/null | tr ' ' '\n' | sed -n 's/^printer-state-reasons=//p'
+}
+
+# Preenche $crops e $originals numa passada. Espelha is_generated() do crop_web.py.
+classify_pdfs() {
+    local f name stem tail
+    crops=()
+    originals=()
+    for f in $LABEL_DIR/*.pdf(N); do
+        name=${f:t}
+        stem=${name%.pdf}
+        tail=${stem##*-}
+        case "$name" in
+            *-bloco*.pdf|*-auto.pdf|*-manual.pdf)
+                crops+=("$f")
+                ;;
+            *)
+                if [[ "$stem" == *-* && "$tail" == [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f] ]]; then
+                    crops+=("$f")
+                else
+                    originals+=("$f")
+                fi
+                ;;
+        esac
+    done
+}
+
+# 0 = fila esvaziou, 1 = travada. Travamento e' connecting-to-device persistente,
+# nao tempo de relogio: uma etiqueta grande pode demorar sem estar travada.
+wait_job() {
+    local q=$1 stuck_limit=${2:-20} max=${3:-180}
+    local waited=0 stuck=0
+    while [ "$(queue_len $q)" != "0" ] && [ $waited -lt $max ]; do
+        case "$(printer_reasons $q)" in
+            *connecting-to-device*|*hold-new-jobs*) stuck=$((stuck + 1)) ;;
+            *) stuck=0 ;;
+        esac
+        [ $stuck -ge $stuck_limit ] && return 1
+        sleep 1
+        waited=$((waited + 1))
+    done
+    [ "$(queue_len $q)" = "0" ]
 }
 
 # Se o usuario abortar no meio (ex: no prompt do sudo), a fila nao pode ficar
@@ -103,6 +179,172 @@ fix_printer() {
     return 0
 }
 
+if [ "$1" = "--print" ] || [ "$1" = "--print-preview" ]; then
+    preview=0
+    [ "$1" = "--print-preview" ] && preview=1
+    shift
+    files=()
+    for arg in "$@"; do
+        case "$arg" in
+            -*) echo "Opcao desconhecida: $arg"; exit 1 ;;
+            *) files+=("$arg") ;;
+        esac
+    done
+
+    classify_pdfs
+    [ ${#files[@]} -eq 0 ] && files=("${crops[@]}")
+
+    if [ ${#files[@]} -eq 0 ]; then
+        echo "Nenhum recorte encontrado em $LABEL_DIR"
+        echo "Rode 'magic' primeiro pra gerar os cortes."
+        exit 1
+    fi
+
+    queue=$(find_queue)
+    if [ -z "$queue" ]; then
+        echo "Nenhuma fila de impressao encontrada."
+        exit 1
+    fi
+
+    state=$(printer_state "$queue")
+    reasons=$(printer_reasons "$queue")
+
+    if [ "$preview" = "1" ]; then
+        # Estado da impressora so' interessa quando ha' algo errado; no caso
+        # normal o preview e' so' a lista de arquivos.
+        suspect=0
+        [ "$state" != "3" ] && suspect=1
+        case "$reasons" in
+            *connecting-to-device*|*hold-new-jobs*) suspect=1 ;;
+        esac
+
+        if [ "$suspect" = "1" ]; then
+            case "$state" in
+                3) state_txt="idle" ;;
+                4) state_txt="imprimindo" ;;
+                5) state_txt="parada" ;;
+                *) state_txt="estado $state" ;;
+            esac
+            echo "Fila: $queue ($state_txt)"
+            current=$(queue_uri "$queue")
+            actual=$(real_uri "$current")
+            if [ -z "$actual" ]; then
+                echo "URI:  impressora nao aparece no USB"
+            elif [ "$current" != "$actual" ]; then
+                echo "URI:  divergente, 'magic --print' realinha antes de imprimir"
+            else
+                echo "URI:  ok"
+            fi
+            echo
+        fi
+
+        echo "${#files[@]} arquivo(s) seriam impressos:"
+        for f in "${files[@]}"; do
+            printf "  - %-52s %6s KB  %s\n" "${f:t}" \
+                "$(( $(stat -f %z "$f") / 1024 ))" \
+                "$(stat -f "%Sm" -t "%d/%m %H:%M" "$f")"
+        done
+
+        if [ ${#originals[@]} -gt 0 ]; then
+            echo
+            echo "Ignorados (originais):"
+            for f in "${originals[@]}"; do
+                echo "  - ${f:t}"
+            done
+        fi
+
+        echo
+        echo "Nada foi impresso. Use 'magic --print' pra imprimir."
+        exit 0
+    fi
+
+    echo "Imprimindo ${#files[@]} arquivo(s) em $queue:"
+    echo
+    release_on_abort "$queue"
+
+    # Fila segurando job engole tudo em silencio; solta antes de mandar.
+    case "$reasons" in
+        *hold-new-jobs*)
+            echo "Fila estava segurando jobs, liberando."
+            cupsenable --release "$queue"
+            echo
+            ;;
+    esac
+
+    # O -o fit-to-page do CUPS nao tem efeito nesta impressora (a cadeia vai pro
+    # rastertodlabel e o encaixe se perde), entao o ajuste e' feito aqui.
+    tmp=$(mktemp -d)
+    trap "rm -rf $tmp" EXIT
+    fitted=()
+    for f in "${files[@]}"; do
+        if [ ! -f "$f" ]; then
+            echo "Arquivo nao encontrado: $f"
+            exit 1
+        fi
+        out=$tmp/${f:t}
+        $LABEL_DIR/.venv/bin/python $LABEL_DIR/fit_label.py "$f" "$out" --quiet
+        case $? in
+            0) fitted+=("$out") ;;
+            3) fitted+=("$f") ;;   # ja' cabe: vai intocado, como sempre foi
+            *) echo "Falha ao ajustar ${f:t}"; exit 1 ;;
+        esac
+    done
+
+    current=$(queue_uri "$queue")
+    actual=$(usb_uri_fast "$current")
+    if [ -n "$actual" ] && [ "$current" != "$actual" ]; then
+        lpadmin -p "$queue" -v "$actual" || exit 1
+    fi
+
+    for i in {1..${#fitted[@]}}; do
+        echo "-> ${files[$i]:t}"
+        lp -d "$queue" -t "${files[$i]:t}" -- "${fitted[$i]}" >/dev/null \
+            || { echo "   falha ao enviar"; exit 1 }
+    done
+    echo
+
+    # Tudo ja' esta' na fila; daqui pra frente e' so' vigiar. O descritor troca
+    # entre um job e outro, entao reapontar na hora evita o encalhe sem precisar
+    # serializar o envio.
+    limit=$((120 + 60 * ${#fitted[@]}))
+    waited=0
+    stuck=0
+    while [ "$(queue_len $queue)" != "0" ] && [ $waited -lt $limit ]; do
+        current=$(queue_uri "$queue")
+        actual=$(usb_uri_fast "$current")
+        if [ -n "$actual" ] && [ "$current" != "$actual" ]; then
+            echo "   descritor mudou, reapontando"
+            cupsdisable --hold "$queue"
+            lpadmin -p "$queue" -v "$actual"
+            cupsenable --release "$queue"
+            stuck=0
+        else
+            case "$(printer_reasons $queue)" in
+                *connecting-to-device*|*hold-new-jobs*) stuck=$((stuck + 1)) ;;
+                *) stuck=0 ;;
+            esac
+            if [ $stuck -ge 20 ]; then
+                echo "   encalhou. Rodando o fix, os jobs ficam preservados."
+                fix_printer "$queue" || break
+                stuck=0
+            fi
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    faltam=$(queue_len "$queue")
+    echo
+    if [ "$faltam" = "0" ]; then
+        echo "Pronto. ${#files[@]} etiqueta(s) impressa(s)."
+        exit 0
+    fi
+
+    echo "$((${#files[@]} - faltam)) de ${#files[@]} impressa(s), $faltam ainda na fila."
+    echo "Rode 'magic --fix' pra destravar; os jobs continuam la'."
+    exit 1
+fi
+
 if [ "$1" = "--fix" ]; then
     shift
     purge=0
@@ -138,8 +380,9 @@ if [ "$1" = "--fix" ]; then
         fi
     fi
 
-    echo "Fila: $queue"
     [ "$held" = "1" ] && echo "Fila estava segurando jobs."
+
+    echo "Fila: $queue"
     if [ "$pending" != "0" ]; then
         if [ "$purge" = "1" ]; then
             echo "Jobs na fila: $pending (serao cancelados)"
