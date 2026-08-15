@@ -16,6 +16,7 @@ Opções:
 """
 
 import sys
+import re
 import argparse
 from pathlib import Path
 import fitz
@@ -101,14 +102,11 @@ def process_page(pdf_path, doc, page_num, page, args):
     run_manual(pdf_path, doc, page, page_num, regions)
 
 
-CROP_SUFFIXES = ("-bloco1.pdf", "-bloco2.pdf", "-bloco3.pdf", "-bloco4.pdf", "-auto.pdf")
+CROP_PATTERN = re.compile(r"-(bloco\d+|auto|manual|[0-9a-f]{8})\.pdf$")
 
 
 def is_generated(path: Path) -> bool:
-    name = path.name
-    return any(name.endswith(s) for s in CROP_SUFFIXES) or (
-        "-" in path.stem and len(path.stem.split("-")[-1]) == 8
-    )
+    return bool(CROP_PATTERN.search(path.name))
 
 
 def clean(folder: Path):
