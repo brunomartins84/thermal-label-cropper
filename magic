@@ -2,6 +2,10 @@
 
 LABEL_DIR=~/Downloads/pdf-label
 
+# Medidas da etiqueta carregada. Trocou de rolo? Mude aqui.
+LABEL_SIZE_MM="100x150"
+LABEL_GAP_MM=2
+
 find_queue() {
     local q
     q=$(lpstat -d 2>/dev/null | awk -F': +' '{print $2}')
@@ -134,6 +138,26 @@ release_on_abort() {
     # Aspas duplas de proposito: a fila precisa ser fixada agora, nao na hora
     # em que o trap disparar, quando $1 ja' e' outra coisa.
     trap "echo; echo 'Interrompido. Liberando a fila.'; cupsenable --release '$1' 2>/dev/null; exit 130" INT TERM
+}
+
+# Esta impressora fala TSPL: o tamanho da etiqueta e o vao entre elas ficam na
+# memoria dela, nao no Mac, e somem quando fica dias sem energia. Ai' ela imprime
+# numa area menor, corta o conteudo e cola dois jobs na mesma etiqueta — com o
+# Mac inteiramente correto, que foi o que mascarou o problema em out/2026.
+# Regravar so' grava, nao imprime, entao nao custa etiqueta e vale fazer sempre.
+write_media_config() {
+    local queue=$1 w h tmp
+    w=${LABEL_SIZE_MM%x*}
+    h=${LABEL_SIZE_MM#*x}
+    tmp=$(mktemp)
+    printf 'SIZE %s mm,%s mm\r\nGAP %s mm,0 mm\r\nDIRECTION 0\r\nREFERENCE 0,0\r\n' \
+        "$w" "$h" "$LABEL_GAP_MM" > $tmp
+    if lp -d "$queue" -o raw -t "TSPL SIZE+GAP" "$tmp" >/dev/null 2>&1; then
+        echo "Etiqueta regravada na impressora: ${w}x${h}mm, gap ${LABEL_GAP_MM}mm."
+    else
+        echo "Nao consegui regravar o SIZE/GAP na impressora."
+    fi
+    rm -f $tmp
 }
 
 # Realinha o URI e destrava. Preserva os jobs, a menos que purge=1.
@@ -387,7 +411,8 @@ if [ "$1" = "--fix" ]; then
         current=$(queue_uri "$queue")
         actual=$(real_uri "$current")
         if [ "$current" = "$actual" ]; then
-            echo "$queue: idle, URI correto, fila vazia. Nada a corrigir."
+            echo "$queue: idle, URI correto, fila vazia."
+            write_media_config "$queue"
             exit 0
         fi
     fi
@@ -405,6 +430,8 @@ if [ "$1" = "--fix" ]; then
 
     release_on_abort "$queue"
     fix_printer "$queue" "$purge" "$hard" || exit 1
+
+    write_media_config "$queue"
 
     echo
     lpstat -p "$queue"

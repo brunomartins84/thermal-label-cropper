@@ -105,6 +105,19 @@ job prints once the queue is corrected, so nothing needs to be re-sent.
 | `--hard` | Also kill the wedged USB backend and restart cupsd (asks for sudo) |
 | `--purge` | Discard the queue instead of preserving it |
 
+`--fix` also rewrites the label geometry on the printer itself. This is a TSPL
+printer, so `SIZE` and `GAP` live in its own memory rather than on the Mac, and
+they are lost when it sits unplugged for a few weeks. The printer then prints
+into a smaller area: output is clipped and two jobs land on the same label,
+while everything on the Mac still checks out — which is exactly what made it so
+hard to place in Oct 2026. Rewriting them only stores settings, so it costs no
+label and runs on every `--fix`, including when nothing else needed fixing. The
+values come from `LABEL_SIZE_MM` / `LABEL_GAP_MM` at the top of the script;
+change them if the roll changes.
+
+If output is still misaligned afterwards, the next step is the `GAPDETECT`
+command, which measures the gap itself and consumes a couple of labels.
+
 Plain `--fix` runs without sudo (`lpadmin`, `cupsdisable` and `cupsenable`
 authenticate locally for members of `_lpadmin`) and only escalates to `--hard` on its
 own if the printer is still stuck afterwards.
