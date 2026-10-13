@@ -290,11 +290,16 @@ if [ "$1" = "--print" ] || [ "$1" = "--print-preview" ]; then
         esac
     done
 
-    current=$(queue_uri "$queue")
-    actual=$(usb_uri_fast "$current")
-    if [ -n "$actual" ] && [ "$current" != "$actual" ]; then
-        lpadmin -p "$queue" -v "$actual" || exit 1
-    fi
+    # Nao reaponta por palpite: o URI do ioreg nem sempre e' o que o CUPS usa.
+    # So' mexe se a impressora ja' estiver dando sinal de problema, e ai' quem
+    # decide o URI e' o lpinfo, dentro do fix_printer.
+    case "$(printer_reasons $queue)" in
+        *connecting-to-device*|*offline*)
+            echo "Impressora com sinal de problema, conferindo antes de mandar."
+            fix_printer "$queue" || exit 1
+            echo
+            ;;
+    esac
 
     for i in {1..${#fitted[@]}}; do
         echo "-> ${files[$i]:t}"
@@ -309,14 +314,21 @@ if [ "$1" = "--print" ] || [ "$1" = "--print-preview" ]; then
     limit=$((120 + 60 * ${#fitted[@]}))
     waited=0
     stuck=0
+    hint=$(usb_uri_fast "$(queue_uri $queue)")
     while [ "$(queue_len $queue)" != "0" ] && [ $waited -lt $limit ]; do
         current=$(queue_uri "$queue")
-        actual=$(usb_uri_fast "$current")
-        if [ -n "$actual" ] && [ "$current" != "$actual" ]; then
-            echo "   descritor mudou, reapontando"
-            cupsdisable --hold "$queue"
-            lpadmin -p "$queue" -v "$actual"
-            cupsenable --release "$queue"
+        now=$(usb_uri_fast "$current")
+        if [ -n "$now" ] && [ "$now" != "$hint" ]; then
+            # O ioreg so' avisa que o dispositivo re-enumerou; quem diz o URI
+            # valido e' o lpinfo, que le' o device ID IEEE-1284 como o CUPS.
+            hint=$now
+            actual=$(real_uri "$current")
+            if [ -n "$actual" ] && [ "$current" != "$actual" ]; then
+                echo "   descritor mudou, reapontando"
+                cupsdisable --hold "$queue"
+                lpadmin -p "$queue" -v "$actual"
+                cupsenable --release "$queue"
+            fi
             stuck=0
         else
             case "$(printer_reasons $queue)" in
