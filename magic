@@ -447,7 +447,10 @@ if [ "$1" = "--clean" ]; then
 elif [ "$1" = "--clean-all" ]; then
     python crop_web.py --clean-all
 elif [ $# -eq 0 ]; then
-    python crop_web.py *.pdf
+    # So' o que ainda nao tem recorte. Passar *.pdf reprocessava tudo e, pior,
+    # mandava os proprios recortes pro detector, que abria o modo manual e
+    # travava no navegador.
+    python crop_web.py --pending
 else
     python crop_web.py "$@"
 fi

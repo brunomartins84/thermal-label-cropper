@@ -43,6 +43,8 @@ def parse_args():
                    help="Apaga recortes gerados, mantém originais")
     p.add_argument("--clean-all", action="store_true",
                    help="Apaga todos os PDFs da pasta")
+    p.add_argument("--pending", action="store_true",
+                   help="Processa so' os originais que ainda nao tem recorte")
     p.add_argument("-h", "--help", action="help")
     return p.parse_args()
 
@@ -102,11 +104,26 @@ def process_page(pdf_path, doc, page_num, page, args):
     run_manual(pdf_path, doc, page, page_num, regions)
 
 
-CROP_PATTERN = re.compile(r"-(bloco\d+|auto|manual|[0-9a-f]{8})\.pdf$")
+CROP_SUFFIX = r"(-p\d+)?-(bloco\d+|auto|manual|[0-9a-f]{8})\.pdf$"
+CROP_PATTERN = re.compile(CROP_SUFFIX)
 
 
 def is_generated(path: Path) -> bool:
     return bool(CROP_PATTERN.search(path.name))
+
+
+def has_crops(original: Path, all_pdfs) -> bool:
+    """Casa o nome inteiro, nao so' o prefixo: senao Etiqueta-2-bloco1.pdf
+    contaria como recorte de Etiqueta.pdf e o original seria pulado."""
+    pat = re.compile("^" + re.escape(original.stem) + CROP_SUFFIX)
+    return any(pat.match(p.name) for p in all_pdfs)
+
+
+def pending(folder: Path):
+    """Originais que ainda nao foram recortados."""
+    all_pdfs = sorted(folder.glob("*.pdf"))
+    return [p for p in all_pdfs
+            if not is_generated(p) and not has_crops(p, all_pdfs)]
 
 
 def clean(folder: Path):
@@ -138,6 +155,15 @@ def main():
     if args.clean:
         clean(Path("~/Downloads/pdf-label").expanduser())
         return
+
+    if args.pending:
+        folder = Path("~/Downloads/pdf-label").expanduser()
+        todo = pending(folder)
+        if not todo:
+            print("Nada novo pra processar.")
+            return
+        print(f"{len(todo)} arquivo(s) novo(s):")
+        args.pdf = [str(p) for p in todo]
 
     for pdf_arg in args.pdf:
         pdf_path = Path(pdf_arg).expanduser()

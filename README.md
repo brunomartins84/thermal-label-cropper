@@ -39,6 +39,11 @@ Or drop PDFs into `~/Downloads/pdf-label/` and use the `magic` helper (see below
 | `--dry-run` | off | Show detected blocks without saving any files |
 | `--clean` | off | Delete generated crops, keep originals |
 | `--clean-all` | off | Delete all PDFs in the folder |
+| `--pending` | off | Process only originals that have no crops yet |
+
+`--pending` matches crops against the whole original name, not just its prefix,
+so `Etiqueta-2-bloco1.pdf` is not mistaken for a crop of `Etiqueta.pdf` and the
+latter still gets processed.
 
 A file counts as a generated crop when it ends in `-bloco<N>.pdf`, `-auto.pdf`,
 `-manual.pdf`, or an 8-character hex suffix from the manual UI. Everything else is
@@ -55,7 +60,8 @@ ln -sf ~/Downloads/pdf-label/magic ~/bin/magic
 
 | Command | Action |
 |---|---|
-| `magic` | Process all PDFs in the folder |
+| `magic` | Crop the originals that have no crops yet |
+| `magic file.pdf` | Crop that file specifically, even if already done |
 | `magic --dry-run` | Preview detected blocks without saving |
 | `magic --print-preview` | List which crops would be printed — touches nothing |
 | `magic --print` | Print the crops, one job at a time |
