@@ -167,8 +167,10 @@ expensive step and the input comes from outside.
 `deploy/pdf-label.service` is the systemd alternative if you would rather run it
 straight on the host without Docker.
 
-`deploy/nginx.conf` is the live site at `etiqueta.undershows.com.br`. It is
-behind basic auth: create the password file first, or `nginx -t` fails on
+`deploy/nginx.conf` is the live site at `etiqueta.undershows.com.br`, HTTP only —
+`certbot --nginx` adds the TLS block and the redirect itself, and pointing
+`ssl_certificate` at a file that does not exist yet would make `nginx -t` fail
+before certbot ever runs. It is behind basic auth: create the password file first, or `nginx -t` fails on
 purpose rather than serving an open PDF renderer.
 
 ```bash
