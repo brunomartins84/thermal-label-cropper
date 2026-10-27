@@ -140,12 +140,46 @@ and the current spike when the thermal head fires resets the device mid-job.
 Plugging it straight into the Mac, or into a powered hub, reduces how often it
 happens.
 
+## Web service (print from the phone)
+
+`server.py` runs the same detection without needing the Mac: open the page on
+your phone, pick the PDF the carrier gave you, and it returns the crops at
+label size, ready to open in a Bluetooth label app.
+
+This exists because the cropping is the part that matters and it used to live
+only on the Mac — Bluetooth solves printing from the phone, not cropping.
+
+```bash
+git clone <repo> /srv/pdf-label && cd /srv/pdf-label
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+sudo cp deploy/pdf-label.service /etc/systemd/system/
+sudo systemctl enable --now pdf-label
+sudo cp deploy/nginx.conf /etc/nginx/sites-available/pdf-label
+sudo ln -s /etc/nginx/sites-available/pdf-label /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Edit the domain in `deploy/nginx.conf` first. `client_max_body_size` there must
+stay at or above `MAX_UPLOAD` in `server.py`, or uploads die with a 413 before
+reaching the app.
+
+Crops are written to a random directory under `/tmp` and swept after two hours;
+there is no database and nothing is kept. Uploads are capped at 25 MB and 20
+pages, and the download route rejects anything that is not a 16-hex token plus
+a bare filename.
+
+When detection is not confident — a single block covering most of the page —
+the service has no manual fallback like the CLI does, so it returns the whole
+page and says so.
+
 ## Project structure
 
 ```
 crop_web.py   # CLI entry point and page processing logic
 detector.py   # pixel-based block detection (no Flask dependency)
 app.py        # browser fallback UI (Flask)
+server.py     # web service: upload a PDF, get the crops back
+deploy/       # systemd unit and nginx site for server.py
 fit_label.py  # scales/rotates a crop onto the label before printing
 magic         # zsh wrapper: crop, print, printer recovery
 ```
