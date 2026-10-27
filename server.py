@@ -27,9 +27,6 @@ MAX_PAGES = 20
 SESSION_TTL = 2 * 60 * 60          # recortes somem depois de 2h
 WORK_DIR = Path("/tmp/pdf-label-web")
 MAX_SINGLE_AREA_RATIO = 0.85       # igual ao crop_web.py
-MM = 72 / 25.4
-LABEL_W_MM, LABEL_H_MM = 100, 150  # etiqueta carregada na impressora
-SAFE_MARGIN = 0.03                 # folga pra nao raspar a area imprimivel
 TOKEN_RE = re.compile(r"^[0-9a-f]{16}$")
 
 app = Flask(__name__)
@@ -177,34 +174,13 @@ def crop():
 
     return render_template_string(
         PAGE, crops=crops, warning=warning,
-        sub=f"{len(crops)} recorte(s), no formato da etiqueta. Toque pra baixar.")
+        sub=f"{len(crops)} recorte(s). Toque pra baixar e imprimir.")
 
 
 def _save(doc, page_num, rect, path):
-    """Monta a pagina no formato da etiqueta, com o recorte centralizado e
-    girado se couber melhor.
-
-    O app do celular estica a imagem pra preencher o papel, em vez de encaixar
-    preservando a proporcao. Entregar a origem ja' na proporcao da etiqueta faz
-    esse esticamento virar inofensivo. Importa porque QR code distorcido pode
-    falhar na leitura do transportador — barra 1D aguenta, QR nao."""
-    media_w, media_h = LABEL_W_MM * MM, LABEL_H_MM * MM
-    inner_w, inner_h = media_w * (1 - 2 * SAFE_MARGIN), media_h * (1 - 2 * SAFE_MARGIN)
-
-    best = None
-    for angle in (0, 90):
-        w, h = (rect.width, rect.height) if angle == 0 else (rect.height, rect.width)
-        scale = min(inner_w / w, inner_h / h)
-        if best is None or scale > best[0]:
-            best = (scale, angle, w * scale, h * scale)
-
-    _, angle, out_w, out_h = best
-    x, y = (media_w - out_w) / 2, (media_h - out_h) / 2
-
     out = fitz.open()
-    page = out.new_page(width=media_w, height=media_h)
-    page.show_pdf_page(fitz.Rect(x, y, x + out_w, y + out_h),
-                       doc, page_num, clip=rect, rotate=angle)
+    page = out.new_page(width=rect.width, height=rect.height)
+    page.show_pdf_page(page.rect, doc, page_num, clip=rect)
     out.save(path)
     out.close()
 
