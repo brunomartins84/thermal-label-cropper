@@ -32,6 +32,13 @@ queue_len() {
     lpstat -o "$1" 2>/dev/null | grep -c .
 }
 
+# O (N) e' o que impede o zsh de abortar com "no matches found" quando a pasta
+# esta' vazia: sem ele o glob falha no shell, antes de qualquer redirecionamento.
+count_pdfs() {
+    local f=(*.pdf(N))
+    echo ${#f[@]}
+}
+
 urlenc() {
     local s=$1 out="" i c
     for (( i = 1; i <= ${#s}; i++ )); do
@@ -442,7 +449,7 @@ fi
 cd $LABEL_DIR || exit 1
 source .venv/bin/activate
 
-before=$(ls -1 *.pdf 2>/dev/null | wc -l)
+before=$(count_pdfs)
 
 if [ "$1" = "--clean" ]; then
     python crop_web.py --clean
@@ -461,7 +468,7 @@ fi
 # serial de fabrica, entao nao da' pra saber em qual esta' plugado nem ha'
 # quanto tempo ela ficou sem energia; regravar o SIZE/GAP agora custa alguns
 # segundos, nao gasta etiqueta, e evita descobrir pela etiqueta cortada.
-after=$(ls -1 *.pdf 2>/dev/null | wc -l)
+after=$(count_pdfs)
 if [ "$after" -gt "$before" ]; then
     queue=$(find_queue)
     # Fila com job pendente: nao empilha mais um, o anterior ainda nem saiu.
