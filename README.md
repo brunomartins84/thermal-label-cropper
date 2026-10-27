@@ -149,6 +149,12 @@ label size, ready to open in a Bluetooth label app.
 This exists because the cropping is the part that matters and it used to live
 only on the Mac — Bluetooth solves printing from the phone, not cropping.
 
+Dependencies are pinned. Without pins the server installed PyMuPDF 2.0 while
+development ran 1.27, and 2.0 pulls `pymupdf_layout`, `pymupdf4llm` and
+`onnxruntime` — around 114 MB of OCR and ML this app never calls, telemetry
+included. Pinning cut the image from 639 MB to 415 MB and silenced the
+startup errors.
+
 ```bash
 git clone https://github.com/brunomartins84/thermal-label-cropper.git /srv/pdf-label
 cd /srv/pdf-label && docker compose up -d --build
