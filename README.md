@@ -185,6 +185,14 @@ there is no database and nothing is kept. Uploads are capped at 25 MB and 20
 pages, and the download route rejects anything that is not a 16-hex token plus
 a bare filename.
 
+Crops come out already shaped like the label: a 100x150mm page with the content
+centred, rotated when that fits better, and a 3% safety margin. The Android app
+stretches whatever it is given to fill the label rather than scaling to fit, so
+handing it something with the label's own proportions makes that stretch a
+no-op. This matters beyond looks — a 1D barcode survives being stretched
+because the scanner reads ratios between bars, but a QR code needs square
+modules and can stop scanning at the carrier's counter.
+
 When detection is not confident — a single block covering most of the page —
 the service has no manual fallback like the CLI does, so it returns the whole
 page and says so.
