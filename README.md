@@ -60,7 +60,7 @@ ln -sf ~/Downloads/pdf-label/magic ~/bin/magic
 
 | Command | Action |
 |---|---|
-| `magic` | Crop the originals that have no crops yet |
+| `magic` | Crop the originals that have no crops yet, and refresh the printer's label geometry |
 | `magic file.pdf` | Crop that file specifically, even if already done |
 | `magic --dry-run` | Preview detected blocks without saving |
 | `magic --print-preview` | List which crops would be printed — touches nothing |
@@ -123,6 +123,13 @@ change them if the roll changes.
 
 If output is still misaligned afterwards, the next step is the `GAPDETECT`
 command, which measures the gap itself and consumes a couple of labels.
+
+Plain `magic` rewrites them too, but only when it actually produced crops —
+that is, right before a print session. There are two identical printers sharing
+the same factory serial, so there is no way to tell which one is plugged in or
+how long it sat without power; rewriting costs a few seconds, no label, and
+removes the chance of finding out from a clipped print. It is skipped when a
+job is already pending, so nothing piles up while a printer is disconnected.
 
 Plain `--fix` runs without sudo (`lpadmin`, `cupsdisable` and `cupsenable`
 authenticate locally for members of `_lpadmin`) and only escalates to `--hard` on its
