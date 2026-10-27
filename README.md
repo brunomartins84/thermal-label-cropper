@@ -150,14 +150,22 @@ This exists because the cropping is the part that matters and it used to live
 only on the Mac — Bluetooth solves printing from the phone, not cropping.
 
 ```bash
-git clone <repo> /srv/pdf-label && cd /srv/pdf-label
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-sudo cp deploy/pdf-label.service /etc/systemd/system/
-sudo systemctl enable --now pdf-label
+git clone https://github.com/brunomartins84/thermal-label-cropper.git /srv/pdf-label
+cd /srv/pdf-label && docker compose up -d --build
 sudo cp deploy/nginx.conf /etc/nginx/sites-available/pdf-label
 sudo ln -s /etc/nginx/sites-available/pdf-label /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
 ```
+
+The container binds to `127.0.0.1:8000` only, so nginx on the host is the one
+thing facing the internet. It runs as an unprivileged user with a read-only
+filesystem, all capabilities dropped and `no-new-privileges`; the only writable
+path is a 256 MB tmpfs at `/tmp` holding the crops, which disappears with the
+container. Memory and PID limits are there because rendering a PDF is the
+expensive step and the input comes from outside.
+
+`deploy/pdf-label.service` is the systemd alternative if you would rather run it
+straight on the host without Docker.
 
 Edit the domain in `deploy/nginx.conf` first. `client_max_body_size` there must
 stay at or above `MAX_UPLOAD` in `server.py`, or uploads die with a 413 before
