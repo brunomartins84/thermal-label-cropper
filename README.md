@@ -167,9 +167,16 @@ expensive step and the input comes from outside.
 `deploy/pdf-label.service` is the systemd alternative if you would rather run it
 straight on the host without Docker.
 
-Edit the domain in `deploy/nginx.conf` first. `client_max_body_size` there must
-stay at or above `MAX_UPLOAD` in `server.py`, or uploads die with a 413 before
-reaching the app.
+`deploy/nginx.conf` is the live site at `etiqueta.undershows.com.br`. It is
+behind basic auth: create the password file first, or `nginx -t` fails on
+purpose rather than serving an open PDF renderer.
+
+```bash
+sudo htpasswd -c /etc/nginx/.htpasswd-pdf-label bruno
+```
+
+`client_max_body_size` must stay at or above `MAX_UPLOAD` in `server.py`, or
+uploads die with a 413 before reaching the app.
 
 Crops are written to a random directory under `/tmp` and swept after two hours;
 there is no database and nothing is kept. Uploads are capped at 25 MB and 20
